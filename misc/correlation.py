@@ -7,8 +7,8 @@ Created on Sat Feb  7 13:24:43 2015
 import numpy as np
 import matplotlib.pyplot as plt
 import pyopencl as cl
-from pyopencl.reduction import ReductionKernel
 import pyopencl.array as arr
+from pyopencl.elementwise import ElementwiseKernel
 import time
 
 def corr(x,y,lag):
@@ -31,41 +31,19 @@ def corr(x,y,lag):
 
     return np.concatenate((cor_p[::-1][:len(cor_p)-1],cor_n))
 
-def cl_setup():
-    print cl.get_platforms()
-    a=int(raw_input("Enter Platform index"))
+def cl_setup(a):
+    #print cl.get_platforms()
+    #a=int(raw_input("Enter Platform index"))
     device=cl.get_platforms()[a].get_devices()[0] #0=NV, 1=Beignet, 2=CPU
     ctx=cl.Context([device]) #Just grabs platform 0, whatever it is.
     queue=cl.CommandQueue(ctx)
     mf=cl.mem_flags
-    kernel=file('correlation.c').read()
-    prg=cl.Program(ctx,kernel)
-    prg.build()
-    return (ctx,queue,mf,prg)
+    return (ctx,queue,mf)
 
-def test_sum():
-    ctx,queue,mf,prg=cl_setup()
-    v_h=np.arange(10,dtype=np.float32)
-    r_h=np.zeros(1,dtype=np.float32)
-
-    v_d=cl.Buffer(ctx,mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=v_h)
-    r_d=cl.Buffer(ctx,mf.WRITE_ONLY,r_h.nbytes)
-    prg.sum(queue, v_h.shape, None, v_d, r_d, np.int32(10))
-    print r_h
-    cl.enqueue_copy(queue, r_h, r_d)
-    print r_h
-    print sum(v_h)
-
-
+"""
 def cl_corr(x_h,y_h,lag,ctx,queue,mf,prg):
-    """
-    _h: host memory
-    _d: device memory
 
-    Assumes x_h and y_h are the same size...
-    """
-
-    ilen=len(x) #length of input, assumes that len(x)=len(y).
+    ilen=len(x_h) #length of input, assumes that len(x)=len(y).
     #ctx,queue,mf,prg=cl_setup()
     print(ctx)
 
@@ -82,27 +60,45 @@ def cl_corr(x_h,y_h,lag,ctx,queue,mf,prg):
 
     for l in range(lag):
         prg.multiply(queue, x_h.shape, None, x_d, y_d, res_p, res_n, np.int32(l))
-        p=arr.Array(queue,(ilen,),dtype=np.float32,data=res_p)
-        n=arr.Array(queue,(ilen,),dtype=np.float32,data=res_n)
-        cor_p[l]=arr.sum(p).get()
-        cor_n[l]=arr.sum(n).get()
+        p=cl.array.Array(queue,(ilen,),dtype=np.float32,data=res_p)
+        n=cl.array.Array(queue,(ilen,),dtype=np.float32,data=res_n)
+        cor_p[l]=cl.array.sum(p).get()
+        cor_n[l]=cl.array.sum(n).get()
     return np.concatenate((cor_n[::-1][:len(cor_n)-1],cor_p))
+"""
+
+
+def corr_cl(x_h,y_h,lag,ctx,queue,mf):
+    size=len(x_h)
+    x_d=arr.to_device(queue,x_h)
+    y_d=arr.to_device(queue,y_h)
+
+    cor_p=np.empty(lag,dtype='float')
+    cor_n=np.empty(lag,dtype='float')
+
+    for l in range(lag):
+        cor_p[l]=arr.sum(arr.dot(x_d[:(size-l)], y_d[l:])).get()
+        cor_n[l]=arr.sum(arr.dot(y_d[:(size-l)], x_d[l:])).get()
+
+    return np.concatenate((cor_p[::-1][:len(cor_p)-1],cor_n))
+
 
 if __name__=='__main__':
-    (ctx,queue,mf,prg)=cl_setup()
-    n=30000
+    (ctx,queue,mf)=cl_setup(0)
+    n=10000
     x=np.random.rand(n).astype(np.float32)
     y=np.random.rand(n).astype(np.float32)
+
     t0=time.time()
-    corr(x,y,n)
-    a=time.time()-t0
+    print corr_cl(x,y,n,ctx,queue,mf)
+    dt0=time.time()-t0
+
     t1=time.time()
-    cl_corr(x,y,n,ctx,queue,mf,prg)
-    b=time.time()-t1
-    print("Input size is " + str(n))
-    print("Single Threaded Time")
-    print a
-    print("OpenCL Time")
-    print b
-    print("Performance Ratio")
-    print(str(a/b) + " X")
+    print corr(x,y,n)
+    dt1=time.time()-t1
+
+    print "CL platform is "+str(ctx)
+    print "INPUT SIZE:"+str(n)
+    print "CL TIME:"+str(dt0)
+    print "CPU_TIME:"+str(dt1)
+    print "PERFORMANCE RATIO:"+str(dt1/dt0)
